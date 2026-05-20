@@ -1,245 +1,128 @@
-# ✅ Failed Auth Log Feature - Implementation Summary
+# Fail Auth Logs Endpoint Fix - 500 Error Resolution
 
-## What Was Added
+## Problem
+When accessing the fail-auth-logs endpoint via Postman/ngrok:
+```
+GET https://subacetabular-jodee-literally.ngrok-free.dev/tenant/demo/fail-auth-logs
+Response: HTTP 500
+{
+    "statusCode": 500,
+    "message": "Internal server error"
+}
+```
 
-Based on your specification sheet, I've successfully implemented a **Failed Authentication Log Tracking** endpoint for the Tenant Users Management API.
+## Root Cause
+**The `log_fail_auth` table did not exist in the database**, causing a database query error when the endpoint tried to retrieve failed authentication logs.
 
----
+The endpoint implementation in [src/tenant/tenant-users.service.ts](src/tenant/tenant-users.service.ts#L327-L368) calls:
+```typescript
+const [logs, total] = await this.logFailAuthRepository.findAndCount({
+  where: whereConditions,
+  skip,
+  take,
+  order: { created_at: 'DESC' },
+});
+```
 
-## 🎯 New Endpoint
+But the table was never created, resulting in a database error being thrown as HTTP 500.
 
-### Get Failed Auth Logs
-**Endpoint:** `GET /tenant/:tenant_code/fail-auth-logs`
+## Solution
+Created the missing `log_fail_auth` table in MySQL using the following SQL:
 
-**Authentication:** Requires JWT + APPROVER role (role '2')
+```sql
+CREATE TABLE IF NOT EXISTS log_fail_auth (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  userid INT NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  username VARCHAR(255),
+  password TEXT,
+  message TEXT,
+  tenant_id VARCHAR(255),
+  ip_address VARCHAR(50),
+  user_agent TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX IDX_LOG_FAIL_AUTH_TENANT_DATE (tenant_id, created_at),
+  INDEX IDX_LOG_FAIL_AUTH_USERID (userid),
+  INDEX IDX_LOG_FAIL_AUTH_EMAIL (email)
+);
+```
 
-**Filters:**
-- ✅ **Date Filter** - Default: Today only (format: YYYY-MM-DD)
-- ✅ **Pagination** - Default: 50 records per page
-- ✅ **Search** - By username or email
+### Why The Table Wasn't Created
+- A migration file exists at [src/database/migrations/CreateLogFailAuthTable1715952001000.ts](src/database/migrations/CreateLogFailAuthTable1715952001000.ts)
+- The migration was not executed in the development database
+- Running `npm run migration:run` doesn't work when connecting from the host machine (DNS resolution fails for "mysql" hostname)
+- Solution: Manually created the table using docker exec command
 
-**Response Fields (sesuai spec sheet Anda):**
-- `userid` - User ID yang gagal login
-- `email` - Email pengguna  
-- `password` - Username:password yang di-attempt
-- `message` - Error message (Invalid credentials, User not found, etc.)
-- `ip_address` - IP address dari attempt (bonus feature)
-- `created_at` - Waktu attempt
+## Verification
 
----
+### ✅ Local Testing (HTTP 200 OK)
+```bash
+# Generate JWT token
+curl http://localhost:7001/auth/debug/token/4/2
 
-## 📊 Example Response
+# Test endpoint with token
+curl -H "Authorization: Bearer <token>" http://localhost:7001/tenant/demo/fail-auth-logs
 
-```json
+# Response
 {
   "data": [
     {
       "userid": 4,
-      "email": "john.anderson@company.com",
-      "password": "john.anderson:wrongpassword",
+      "email": "john.new@company.com",
+      "password": "john.new:wrongpass",
       "message": "Invalid credentials",
       "ip_address": "192.168.1.100",
-      "created_at": "2026-05-20T10:30:45.000Z"
-    },
-    {
-      "userid": 5,
-      "email": "sarah.mitchell@company.com",
-      "password": "sarah.mitchell:expiredpass",
-      "message": "User account expired",
-      "ip_address": "192.168.1.101",
-      "created_at": "2026-05-20T10:25:12.000Z"
+      "created_at": "2026-05-20T09:32:34.000Z"
     }
   ],
-  "total": 2,
+  "total": 1,
   "skip": 0,
   "take": 50,
   "date": "2026-05-20"
 }
 ```
 
----
-
-## 🗄️ Database Changes
-
-### New Table: `log_fail_auth`
-```sql
-CREATE TABLE log_fail_auth (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  userid INT NOT NULL,
-  email VARCHAR(255) NOT NULL,
-  username VARCHAR(255),
-  password TEXT,          -- username:password attempt
-  message TEXT,           -- error message
-  tenant_id VARCHAR(255),
-  ip_address VARCHAR(50),
-  user_agent TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Indexes Created:
-- `IDX_LOG_FAIL_AUTH_TENANT_DATE` - For fast filtering by tenant & date
-- `IDX_LOG_FAIL_AUTH_USERID` - For user lookup
-- `IDX_LOG_FAIL_AUTH_EMAIL` - For email search
-
----
-
-## 💻 Code Implementation
-
-### 1. New Entity
-`src/database/entities/log_fail_auth.entity.ts`
-- Complete LogFailAuth entity with all required fields
-
-### 2. New DTOs
-`src/tenant/dto/tenant-users.dto.ts` (updated)
-- `FailAuthLogDto` - Single log response
-- `FailAuthLogListResponseDto` - Paginated list response
-- `GetFailAuthLogsQueryDto` - Query parameters
-
-### 3. Service Method
-`src/tenant/tenant-users.service.ts` (updated)
-- `getFailAuthLogs(tenantId, queryDto)` - Fetches logs with:
-  - Date filtering (default: today)
-  - Search by username/email
-  - Pagination (50 per page default)
-  - Sorted by created_at DESC (newest first)
-
-### 4. Controller Endpoint
-`src/tenant/tenant.controller.ts` (updated)
-- `GET /tenant/:tenant_code/fail-auth-logs` endpoint
-
-### 5. Module Setup
-`src/tenant/tenant.module.ts` (updated)
-- Added LogFailAuth to TypeOrmModule.forFeature()
-
-### 6. Database Migration
-`src/database/migrations/CreateLogFailAuthTable1715952001000.ts`
-- Creates log_fail_auth table with all columns and indexes
-
----
-
-## 🧪 Test Commands
-
-### Get today's failed auth logs
+### ✅ ngrok Tunnel Testing (HTTP 200 OK)
 ```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+curl -H "Authorization: Bearer <token>" \
+  https://subacetabular-jodee-literally.ngrok-free.dev/tenant/demo/fail-auth-logs
+
+# Same successful response as above
 ```
 
-### Get logs for specific date
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?date=2026-05-20&skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+## Files Modified
+- **Database**: Created `log_fail_auth` table in `master_tenant` database
+
+## Endpoint Details
+
+**Route**: `GET /tenant/:tenant_code/fail-auth-logs`
+
+**Authentication**: Required (Bearer token with APPROVER role)
+
+**Query Parameters**:
+- `skip` (default: 0) - Pagination offset
+- `take` (default: 50) - Items per page (max 50)
+- `date` (optional) - Filter by date in YYYY-MM-DD format (default: today)
+- `search` (optional) - Search by username
+
+**Response Format**:
+```typescript
+{
+  data: FailAuthLogDto[];  // Array of failed auth logs
+  total: number;            // Total count of records
+  skip: number;             // Current pagination offset
+  take: number;             // Items per page
+  date: string;             // Filtered date (YYYY-MM-DD)
+}
 ```
 
-### Search failed auth logs
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?search=john&skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
+## Related Files
+- Service Implementation: [src/tenant/tenant-users.service.ts](src/tenant/tenant-users.service.ts#L327-L368)
+- Controller Endpoint: [src/tenant/tenant.controller.ts](src/tenant/tenant.controller.ts#L698-L708)
+- Entity Definition: [src/database/entities/log_fail_auth.entity.ts](src/database/entities/log_fail_auth.entity.ts)
+- Migration File: [src/database/migrations/CreateLogFailAuthTable1715952001000.ts](src/database/migrations/CreateLogFailAuthTable1715952001000.ts)
+- DTO: [src/tenant/dto/tenant-users.dto.ts](src/tenant/dto/tenant-users.dto.ts)
 
-### Combined: Date + Search
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?date=2026-05-20&search=john&skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
----
-
-## 📋 Requirements Checklist
-
-✅ **Di filter hanya hari ini saja**
-- Default date filter shows today only
-- Can override with `?date=YYYY-MM-DD` parameter
-
-✅ **Pagination 50 data per page**
-- Default: 50 records per page
-- Can adjust with `?take=X` parameter
-
-✅ **Kolom: userid, email, password, message**
-- All 4 required fields included in response
-- Additional: ip_address (security tracking)
-
-✅ **APPROVER role requirement**
-- Endpoint restricted to users with role '2' (APPROVER)
-
-✅ **Sesuai dengan spec sheet**
-- Exactly matches your specification screenshot
-
----
-
-## 🔒 Security Features
-
-- ✅ JWT authentication required
-- ✅ Role-based access control (APPROVER only)
-- ✅ Tenant isolation (only see own tenant logs)
-- ✅ IP address tracking for failed attempts
-- ✅ User agent logging
-- ✅ Indexes for fast querying
-
----
-
-## 📚 Documentation Updated
-
-1. **TENANT_USERS_API.md**
-   - Added complete endpoint documentation with examples
-   - Added FailAuthLogDto to DTO reference section
-   - Updated endpoint overview table
-
-2. **TENANT_USERS_IMPLEMENTATION.md**
-   - Updated completed tasks to include new feature
-   - Added service method description
-   - Added database migration info
-   - Added usage examples
-   - Added database query examples
-
-3. **TENANT_USERS_QUICK_START.md**
-   - Added endpoint to registered endpoints list
-   - Added test commands
-   - Updated feature list
-
----
-
-## ✨ Bonus Features Included
-
-Beyond the spec sheet:
-- ✅ IP address tracking for security
-- ✅ User agent logging (browser/device info)
-- ✅ Search functionality (by username/email)
-- ✅ Sorted by latest first (DESC order)
-- ✅ Multiple indexes for performance
-
----
-
-## 🚀 Deployment Status
-
-✅ **Code compiled successfully** - 0 TypeScript errors  
-✅ **Docker containers running** - All services healthy  
-✅ **Endpoint registered** - `/tenant/:tenant_code/fail-auth-logs` active  
-✅ **API documented** - Complete with examples  
-✅ **Ready for integration** - Frontend can start using immediately  
-
----
-
-## 📞 Integration Steps for Frontend
-
-1. Get valid JWT token from login
-2. Call `GET /tenant/demo/fail-auth-logs?skip=0&take=50`
-3. Display the response data in a table with columns:
-   - userid
-   - email
-   - password (attempt)
-   - message
-   - ip_address (optional)
-   - created_at (timestamp)
-
-4. For date filtering, call with `?date=YYYY-MM-DD` parameter
-5. For search, use `?search=username_or_email` parameter
-
----
-
-**Implementation Date:** May 20, 2026  
-**Status:** ✅ Complete & Running  
-**API Version:** 1.0  
-**Total Endpoints:** 6 (5 user management + 1 audit logging)
+## Status
+✅ **FIXED** - Endpoint now returns 200 OK with failed auth logs data

@@ -1,34 +1,66 @@
-# ✅ Failed Auth Log Feature - Implementation Summary
+# Tenant Users — Frontend Integration (OMNIX)
 
-## What Was Added
+This document is intended for frontend developers who will consume the Tenant Users API (List, Detail, Edit flows) for the OMNIX tenant management UI.
 
-Based on your specification sheet, I've successfully implemented a **Failed Authentication Log Tracking** endpoint for the Tenant Users Management API.
-
----
-
-## 🎯 New Endpoint
-
-### Get Failed Auth Logs
-**Endpoint:** `GET /tenant/:tenant_code/fail-auth-logs`
-
-**Authentication:** Requires JWT + APPROVER role (role '2')
-
-**Filters:**
-- ✅ **Date Filter** - Default: Today only (format: YYYY-MM-DD)
-- ✅ **Pagination** - Default: 50 records per page
-- ✅ **Search** - By username or email
-
-**Response Fields (sesuai spec sheet Anda):**
-- `userid` - User ID yang gagal login
-- `email` - Email pengguna  
-- `password` - Username:password yang di-attempt
-- `message` - Error message (Invalid credentials, User not found, etc.)
-- `ip_address` - IP address dari attempt (bonus feature)
-- `created_at` - Waktu attempt
+Keep this file in the frontend repository as the single source of truth for API contract and UI mapping.
 
 ---
 
-## 📊 Example Response
+## Base
+- Base URL: `http://localhost:7001`
+- All endpoints are prefixed with `/tenant/:tenant_code`
+- Authentication: send `Authorization: Bearer {JWT}` header on every request
+
+---
+
+## 1. List Users (primary view)
+
+Endpoint
+- `GET /tenant/:tenant_code/users`
+
+Query parameters
+- `skip` (number, default: `0`) — pagination offset
+- `take` (number, default: `10`) — pagination limit
+- `search` (string, optional) — search by `username`, `email`, or `fullname` (case-insensitive, substring)
+- `is_active` (boolean, optional) — filter active/inactive
+
+Behavior
+- Returns paginated results, sorted by `create_at` DESC
+- Default `take` = 10 (frontend can increase to show more rows)
+
+Example request (axios)
+
+```js
+import axios from 'axios';
+
+async function fetchUsers(tenantCode, token, { skip = 0, take = 10, search, is_active } = {}) {
+  const params = { skip, take };
+  if (search) params.search = search;
+  if (typeof is_active !== 'undefined') params.is_active = is_active;
+
+  const { data } = await axios.get(`http://localhost:7001/tenant/${tenantCode}/users`, {
+    headers: { Authorization: `Bearer ${token}` },
+    params,
+  });
+
+  return data; // { data: TenantUserDto[], total, skip, take }
+}
+```
+
+Example request (fetch)
+
+```js
+async function fetchUsersFetch(tenantCode, token, query = {}) {
+  const q = new URLSearchParams(query).toString();
+  const res = await fetch(`http://localhost:7001/tenant/${tenantCode}/users?${q}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+```
+
+Response schema (JSON)
 
 ```json
 {
@@ -36,210 +68,196 @@ Based on your specification sheet, I've successfully implemented a **Failed Auth
     {
       "userid": 4,
       "email": "john.anderson@company.com",
-      "password": "john.anderson:wrongpassword",
-      "message": "Invalid credentials",
-      "ip_address": "192.168.1.100",
-      "created_at": "2026-05-20T10:30:45.000Z"
-    },
-    {
-      "userid": 5,
-      "email": "sarah.mitchell@company.com",
-      "password": "sarah.mitchell:expiredpass",
-      "message": "User account expired",
-      "ip_address": "192.168.1.101",
-      "created_at": "2026-05-20T10:25:12.000Z"
+      "fullname": "John Anderson",
+      "nickname": "john.anderson",
+      "is_active": true,
+      "expired_at": "2027-12-31T23:59:59.000Z",
+      "fail_login": 0,
+      "username": "john.anderson",
+      "role": "2"
     }
   ],
-  "total": 2,
+  "total": 6,
   "skip": 0,
-  "take": 50,
-  "date": "2026-05-20"
+  "take": 10
+}
+```
+
+TypeScript interfaces (copy into frontend)
+
+```ts
+export interface TenantUserDto {
+  userid: number;
+  email: string;
+  fullname: string;
+  nickname?: string;
+  is_active: boolean;
+  expired_at?: string | null;
+  fail_login: number;
+  username: string;
+  role: string; // '1'|'2'|'3'|'4'
+}
+
+export interface TenantUserListResponse {
+  data: TenantUserDto[];
+  total: number;
+  skip: number;
+  take: number;
+}
+```
+
+UI mapping — table columns
+- No (index)
+- User ID (`userid`)
+- Email (`email`) — show tooltip with full value if truncated
+- Fullname (`fullname`)
+- Nickname (`nickname`)
+- Status (`is_active`) — show badge: Active / Inactive
+- Expired At (`expired_at`) — format date
+- Fail Login (`fail_login`) — numeric badge
+- Actions — buttons: `Edit`, `Reset PW`, `Unlock`, `Reset 2FA`
+
+Interactions
+- Clicking `Edit` opens modal. Pre-fill modal using `GET /tenant/:tenant_code/users/:userId`.
+- `Reset PW`, `Unlock`, `Reset 2FA` call their respective endpoints (APPROVER role required).
+- After successful update (Edit, Reset PW, Unlock), refresh the list row or re-fetch current page.
+
+---
+
+## 2. User Detail (for Edit modal pre-fill)
+
+Endpoint
+- `GET /tenant/:tenant_code/users/:userId`
+
+Response
+- Returns a single `TenantUserDto` object (see interface above)
+
+Example (axios)
+
+```js
+const { data } = await axios.get(`http://localhost:7001/tenant/${tenantCode}/users/${userId}`, { headers: { Authorization: `Bearer ${token}` } });
+// data is TenantUserDto
+```
+
+---
+
+## 3. Update User (Edit action)
+
+Endpoint
+- `PUT /tenant/:tenant_code/users/:userId`
+
+Permissions
+- Requires JWT and `APPROVER` role in server-side guard. Frontend should show/hide UI actions according to the logged-in user's role.
+
+Allowed request fields (partial allowed — only send fields that changed):
+- `email` (string) — corporate email
+- `fullname` (string)
+- `nickname` (string) — will update `user.username`; must be unique per tenant
+
+Example request (axios)
+
+```js
+const payload = { email: 'john.new@company.com', fullname: 'John New', nickname: 'john.new' };
+const { data } = await axios.put(`http://localhost:7001/tenant/${tenantCode}/users/${userId}`, payload, { headers: { Authorization: `Bearer ${token}` } });
+// data: { message: 'User berhasil diupdate', data: TenantUserDto }
+```
+
+Frontend handling notes
+- If API returns 400 with a `message` "Nickname/username sudah digunakan", show inline error under nickname field.
+- On success: close modal, update row and show toast.
+- On 401: redirect to login
+- On 403: show permission error (insufficient role)
+- On 404: show "user tidak ditemukan"
+
+---
+
+## 4. Actions (Reset Password, Unlock, Reset 2FA)
+
+These actions require `APPROVER` role.
+
+- Reset Password: `POST /tenant/:tenant_code/users/reset-password` with `{ "userId": <id> }`. Response includes generated password in non-production; in production the password should be emailed.
+- Unlock: `POST /tenant/:tenant_code/users/unlock` with `{ "userId": <id>, "reason": "..." }`.
+- Reset 2FA: `POST /tenant/:tenant_code/users/reset-2fa` with `{ "userId": <id> }`.
+
+All return 200 with a message and some payload. After any action, refresh the user row.
+
+---
+
+## 5. Fail Auth Logs (optional integration)
+
+Endpoint
+- `GET /tenant/:tenant_code/fail-auth-logs` (requires APPROVER)
+
+Use for security/monitoring pages. Pagination defaults to 50 items.
+
+---
+
+## 6. Errors & Status Codes
+
+- `200 OK` — success
+- `400 Bad Request` — validation error (body contains `message`)
+- `401 Unauthorized` — invalid or expired token
+- `403 Forbidden` — insufficient role
+- `404 Not Found` — tenant or user not found
+- `500 Internal Server Error` — unexpected
+
+Frontend should parse JSON error body where available and present friendly messages.
+
+---
+
+## 7. UI/UX Recommendations
+
+- Debounce search input (300ms) before calling API
+- Use server-side pagination (do not fetch all records)
+- Show loading state for table and buttons
+- Disable action buttons while request is in progress
+- Confirm destructive actions (e.g., Reset Password) with a modal
+- Mask long emails in table with tooltip for full value
+
+---
+
+## 8. Example React Hook (simplified)
+
+```tsx
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+
+export function useTenantUsers(tenantCode, token) {
+  const [data, setData] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    axios.get(`http://localhost:7001/tenant/${tenantCode}/users`, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { skip: page * pageSize, take: pageSize, search }
+    })
+    .then(res => {
+      if (!mounted) return;
+      setData(res.data.data);
+      setTotal(res.data.total);
+    })
+    .finally(() => mounted && setLoading(false));
+
+    return () => { mounted = false };
+  }, [tenantCode, token, page, pageSize, search]);
+
+  return { data, total, page, pageSize, setPage, setPageSize, setSearch, loading };
 }
 ```
 
 ---
 
-## 🗄️ Database Changes
+## 9. Notes for Backend/Frontend Alignment
 
-### New Table: `log_fail_auth`
-```sql
-CREATE TABLE log_fail_auth (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  userid INT NOT NULL,
-  email VARCHAR(255) NOT NULL,
-  username VARCHAR(255),
-  password TEXT,          -- username:password attempt
-  message TEXT,           -- error message
-  tenant_id VARCHAR(255),
-  ip_address VARCHAR(50),
-  user_agent TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Indexes Created:
-- `IDX_LOG_FAIL_AUTH_TENANT_DATE` - For fast filtering by tenant & date
-- `IDX_LOG_FAIL_AUTH_USERID` - For user lookup
-- `IDX_LOG_FAIL_AUTH_EMAIL` - For email search
+- If you need additional fields in the list response (e.g., `last_login`, `department`), ask backend to add them to `TenantUserDto` and to the SQL query.
+- Keep error message keys consistent: use `message` for human text and `code` for machine-readable errors if needed.
 
 ---
 
-## 💻 Code Implementation
-
-### 1. New Entity
-`src/database/entities/log_fail_auth.entity.ts`
-- Complete LogFailAuth entity with all required fields
-
-### 2. New DTOs
-`src/tenant/dto/tenant-users.dto.ts` (updated)
-- `FailAuthLogDto` - Single log response
-- `FailAuthLogListResponseDto` - Paginated list response
-- `GetFailAuthLogsQueryDto` - Query parameters
-
-### 3. Service Method
-`src/tenant/tenant-users.service.ts` (updated)
-- `getFailAuthLogs(tenantId, queryDto)` - Fetches logs with:
-  - Date filtering (default: today)
-  - Search by username/email
-  - Pagination (50 per page default)
-  - Sorted by created_at DESC (newest first)
-
-### 4. Controller Endpoint
-`src/tenant/tenant.controller.ts` (updated)
-- `GET /tenant/:tenant_code/fail-auth-logs` endpoint
-
-### 5. Module Setup
-`src/tenant/tenant.module.ts` (updated)
-- Added LogFailAuth to TypeOrmModule.forFeature()
-
-### 6. Database Migration
-`src/database/migrations/CreateLogFailAuthTable1715952001000.ts`
-- Creates log_fail_auth table with all columns and indexes
-
----
-
-## 🧪 Test Commands
-
-### Get today's failed auth logs
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
-### Get logs for specific date
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?date=2026-05-20&skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
-### Search failed auth logs
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?search=john&skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
-### Combined: Date + Search
-```bash
-curl -X GET "http://localhost:7001/tenant/demo/fail-auth-logs?date=2026-05-20&search=john&skip=0&take=50" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
----
-
-## 📋 Requirements Checklist
-
-✅ **Di filter hanya hari ini saja**
-- Default date filter shows today only
-- Can override with `?date=YYYY-MM-DD` parameter
-
-✅ **Pagination 50 data per page**
-- Default: 50 records per page
-- Can adjust with `?take=X` parameter
-
-✅ **Kolom: userid, email, password, message**
-- All 4 required fields included in response
-- Additional: ip_address (security tracking)
-
-✅ **APPROVER role requirement**
-- Endpoint restricted to users with role '2' (APPROVER)
-
-✅ **Sesuai dengan spec sheet**
-- Exactly matches your specification screenshot
-
----
-
-## 🔒 Security Features
-
-- ✅ JWT authentication required
-- ✅ Role-based access control (APPROVER only)
-- ✅ Tenant isolation (only see own tenant logs)
-- ✅ IP address tracking for failed attempts
-- ✅ User agent logging
-- ✅ Indexes for fast querying
-
----
-
-## 📚 Documentation Updated
-
-1. **TENANT_USERS_API.md**
-   - Added complete endpoint documentation with examples
-   - Added FailAuthLogDto to DTO reference section
-   - Updated endpoint overview table
-
-2. **TENANT_USERS_IMPLEMENTATION.md**
-   - Updated completed tasks to include new feature
-   - Added service method description
-   - Added database migration info
-   - Added usage examples
-   - Added database query examples
-
-3. **TENANT_USERS_QUICK_START.md**
-   - Added endpoint to registered endpoints list
-   - Added test commands
-   - Updated feature list
-
----
-
-## ✨ Bonus Features Included
-
-Beyond the spec sheet:
-- ✅ IP address tracking for security
-- ✅ User agent logging (browser/device info)
-- ✅ Search functionality (by username/email)
-- ✅ Sorted by latest first (DESC order)
-- ✅ Multiple indexes for performance
-
----
-
-## 🚀 Deployment Status
-
-✅ **Code compiled successfully** - 0 TypeScript errors  
-✅ **Docker containers running** - All services healthy  
-✅ **Endpoint registered** - `/tenant/:tenant_code/fail-auth-logs` active  
-✅ **API documented** - Complete with examples  
-✅ **Ready for integration** - Frontend can start using immediately  
-
----
-
-## 📞 Integration Steps for Frontend
-
-1. Get valid JWT token from login
-2. Call `GET /tenant/demo/fail-auth-logs?skip=0&take=50`
-3. Display the response data in a table with columns:
-   - userid
-   - email
-   - password (attempt)
-   - message
-   - ip_address (optional)
-   - created_at (timestamp)
-
-4. For date filtering, call with `?date=YYYY-MM-DD` parameter
-5. For search, use `?search=username_or_email` parameter
-
----
-
-**Implementation Date:** May 20, 2026  
-**Status:** ✅ Complete & Running  
-**API Version:** 1.0  
-**Total Endpoints:** 6 (5 user management + 1 audit logging)
+Made for the frontend team — ask if you want a React modal example (component + form) or full Storybook story.

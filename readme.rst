@@ -117,15 +117,53 @@ POST /auth/resetPassword
 
 ## Password Reset Behavior
 
-### Default Password
-- Password akan direset ke nilai default yang ditentukan di environment variable `PASSWORD_DEFAULT`
-- Password di-hash menggunakan bcrypt (salt rounds: 8)
-- Pengguna akan diminta untuk mengubah password saat login pertama kali
+### Default Password Strategy
+The reset password feature uses a **tenant-aware password selection system**:
 
-### Password Update
-- Password lama tidak diperlukan untuk reset
-- Password baru tidak diminta dalam request
-- Proses menggunakan password default dari konfigurasi sistem
+1. **Tenant-Specific Passwords** (if configured):
+   - Each tenant can have a specific default password
+   - Set via environment variables: `TENANT_PASSWORD_<TENANT_CODE>`
+   - Example: `TENANT_PASSWORD_USER_MANAGEMENT=I7lBLi'7x7s`
+
+2. **Fallback to Global Default** (if no tenant password):
+   - Uses `PASSWORD_DEFAULT` environment variable
+   - Applied when user has no tenant or tenant has no specific password
+
+### Tenant-Specific Password Configuration
+
+The system supports different default passwords for different tenancies:
+
+**Environment Variables:**
+```env
+# User Management Tenancy
+TENANT_PASSWORD_USER_MANAGEMENT="I7lBLi'7x7s"
+
+# User Omnix Tenancy  
+TENANT_PASSWORD_USER_OMNIX="$Hm$U16a3Z"
+
+# Global fallback
+PASSWORD_DEFAULT=abstract123.
+```
+
+**How It Works:**
+1. When reset password is called, the system looks up the user's `tenant_id`
+2. Queries the `tenant` table using the `tenant_id`
+3. Gets the `tenant_code` (e.g., "USER_MANAGEMENT", "USER_OMNIX")
+4. Looks for `TENANT_PASSWORD_<TENANT_CODE>` environment variable
+5. If found, uses that password; otherwise uses `PASSWORD_DEFAULT`
+
+### Available Tenants
+Currently configured tenants in the system:
+
+| Tenant Code | Tenant Name | Tenant ID | Default Password |
+|-------------|-------------|-----------|------------------|
+| USER_MANAGEMENT | User Management | tenant_user_management | I7lBLi'7x7s |
+| USER_OMNIX | User Omnix | tenant_user_omnix | $Hm$U16a3Z |
+| (others) | Custom | - | PASSWORD_DEFAULT |
+
+### Password Hash Update
+- Password lashed using bcrypt (salt rounds: 8)
+- Password stored in `user` table, `password` column
 
 ## Testing Guide
 
@@ -290,8 +328,12 @@ SELECT id, username, password FROM user WHERE username = ?;
 
 ### Required Environment Variables
 ```env
-# Default password for reset
-PASSWORD_DEFAULT=YourDefaultPassword123!
+# Global default password (fallback if no tenant-specific password)
+PASSWORD_DEFAULT=your_default_password
+
+# Tenant-Specific Default Passwords for Reset Password Feature
+TENANT_PASSWORD_USER_MANAGEMENT="I7lBLi'7x7s"
+TENANT_PASSWORD_USER_OMNIX="$Hm$U16a3Z"
 
 # reCAPTCHA Configuration
 RECAPTCHA_SECRET_KEY=your_google_recaptcha_secret_key
@@ -300,6 +342,28 @@ RECAPTCHA_SCORE_THRESHOLD=0.5
 # Application Mode
 ENVIRONMENT=development
 RECAPTCHA_DEV_TOKEN=test-token-dev
+```
+
+### Tenant Password Naming Convention
+Environment variable format: `TENANT_PASSWORD_<TENANT_CODE>`
+
+- Tenant code is derived from the `tenant` table's `tenant_code` column
+- Convert tenant code to UPPERCASE: `user_management` → `USER_MANAGEMENT`
+- Replace spaces/special chars with underscores if needed
+- Example: `TENANT_PASSWORD_USER_MANAGEMENT`
+
+### Configuration Examples
+
+**Example 1: New Tenant**
+If you create a new tenant with code `CUSTOM_TENANT`, add:
+```env
+TENANT_PASSWORD_CUSTOM_TENANT="YourCustomPassword123!"
+```
+
+**Example 2: Without Tenant-Specific Password**
+If a user has no tenant assigned, the system uses:
+```env
+PASSWORD_DEFAULT=your_default_password
 ```
 
 ## Security Considerations

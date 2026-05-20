@@ -107,7 +107,8 @@ curl -H "Authorization: Bearer <token>" \
 - `search` (optional) - Search by username
 
 **Response Format**:
-```typescript
+```
+typescript
 {
   data: FailAuthLogDto[];  // Array of failed auth logs
   total: number;            // Total count of records

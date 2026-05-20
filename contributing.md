@@ -1,452 +1,308 @@
-# Reset Password Feature Documentation
+# Activity Logging System Documentation
 
 ## Overview
-Reset Password adalah fitur keamanan yang memungkinkan pengguna untuk mereset password mereka dengan validasi NIK (Nomor Induk Karyawan) dan email, serta verifikasi reCAPTCHA.
 
-## Endpoint Details
+The Activity Logging System tracks all important user actions and changes within the application. All logged activities are stored in the `log_tenant` table in the master_tenant database with comprehensive before/after audit trails.
 
-### URL
+## Features
+
+- ✅ Automatic logging of user actions
+- ✅ Before/after state tracking (JSON format)
+- ✅ User context capture (username, userid, tenant_id)
+- ✅ Pagination support
+- ✅ Advanced filtering and search
+- ✅ Non-blocking logging (doesn't break main operations)
+
+## API Endpoints
+
+### 1. Get Tenant Activity Logs
+**Endpoint:** `GET /activity-log/tenant`
+
+**Query Parameters:**
+- `limit` (optional): Number of records to return (default: 50, max: 500)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Example:**
+```bash
+curl -X GET "http://localhost:7001/activity-log/tenant?limit=50&offset=0" \
+  -H "Authorization: Bearer <TOKEN>"
 ```
-POST /auth/resetPassword
-```
 
-### Base URL
-- **Development (localhost):** `http://localhost:7001`
-- **Production (ngrok tunnel):** `https://subacetabular-jodee-literally.ngrok-free.dev`
-
-## Request Body
-
-### Required Fields
+**Response:**
 ```json
 {
-  "username": "string (required)",
-  "nik": "string (required)",
-  "email": "string (required)",
-  "recaptchaToken": "string (required)"
-}
-```
-
-### Field Descriptions
-| Field | Type | Description | Example |
-|-------|------|-------------|---------|
-| `username` | string | Username karyawan yang akan mereset password | `agnes` |
-| `nik` | string | Nomor Induk Karyawan (NIK) sesuai data di user_profile | `1234567890123456` |
-| `email` | string | Email karyawan (corporate atau non-corporate) | `agnes@company.com` atau `agnes@gmail.com` |
-| `recaptchaToken` | string | reCAPTCHA token untuk verifikasi | `test-token-dev` (development) |
-
-## Validation Rules
-
-### 1. reCAPTCHA Verification
-- Token harus valid dan terverifikasi
-- Dalam development mode, token `test-token-dev` diterima untuk testing
-- Production menggunakan Google reCAPTCHA v3
-
-### 2. User Existence
-- Username harus terdaftar di dalam database
-- User profile harus ada di tabel `user_profile`
-
-### 3. NIK Validation
-- NIK harus cocok dengan `user_profile.nik`
-- NIK tidak boleh kosong
-- Error: "NIK tidak sesuai" (HTTP 400)
-
-### 4. Email Validation
-- Email harus cocok dengan salah satu:
-  - `user_profile.email_corporate` (email perusahaan)
-  - `user_profile.email_non_corporate` (email non-perusahaan)
-- Error: "Email tidak sesuai" (HTTP 400)
-
-## Response Examples
-
-### Success Response
-```json
-{
-  "message": "Password berhasil direset",
-  "success": true
-}
-```
-
-**HTTP Status:** `200` atau `201`
-
-### Error Responses
-
-#### Invalid NIK
-```json
-{
-  "message": "NIK tidak sesuai",
-  "error": "Bad Request",
-  "statusCode": 400
-}
-```
-
-#### Invalid Email
-```json
-{
-  "message": "Email tidak sesuai",
-  "error": "Bad Request",
-  "statusCode": 400
-}
-```
-
-#### User Not Found
-```json
-{
-  "message": "User not found",
-  "error": "Bad Request",
-  "statusCode": 400
-}
-```
-
-#### User Profile Not Found
-```json
-{
-  "message": "User profile not found",
-  "error": "Bad Request",
-  "statusCode": 400
-}
-```
-
-#### reCAPTCHA Verification Failed
-```json
-{
-  "message": "reCAPTCHA verification failed. Please try again.",
-  "error": "Bad Request",
-  "statusCode": 400
-}
-```
-
-## Password Reset Behavior
-
-### Default Password Strategy
-The reset password feature uses a **tenant-aware password selection system**:
-
-1. **Tenant-Specific Passwords** (if configured):
-   - Each tenant can have a specific default password
-   - Set via environment variables: `TENANT_PASSWORD_<TENANT_CODE>`
-   - Example: `TENANT_PASSWORD_USER_MANAGEMENT=I7lBLi'7x7s`
-
-2. **Fallback to Global Default** (if no tenant password):
-   - Uses `PASSWORD_DEFAULT` environment variable
-   - Applied when user has no tenant or tenant has no specific password
-
-### Tenant-Specific Password Configuration
-
-The system supports different default passwords for different tenancies:
-
-**Environment Variables:**
-```env
-# User Management Tenancy
-TENANT_PASSWORD_USER_MANAGEMENT="I7lBLi'7x7s"
-
-# User Omnix Tenancy  
-TENANT_PASSWORD_USER_OMNIX="$Hm$U16a3Z"
-
-# Global fallback
-PASSWORD_DEFAULT=abstract123.
-```
-
-**How It Works:**
-1. When reset password is called, the system looks up the user's `tenant_id`
-2. Queries the `tenant` table using the `tenant_id`
-3. Gets the `tenant_code` (e.g., "USER_MANAGEMENT", "USER_OMNIX")
-4. Looks for `TENANT_PASSWORD_<TENANT_CODE>` environment variable
-5. If found, uses that password; otherwise uses `PASSWORD_DEFAULT`
-
-### Available Tenants
-Currently configured tenants in the system:
-
-| Tenant Code | Tenant Name | Tenant ID | Default Password |
-|-------------|-------------|-----------|------------------|
-| USER_MANAGEMENT | User Management | tenant_user_management | I7lBLi'7x7s |
-| USER_OMNIX | User Omnix | tenant_user_omnix | $Hm$U16a3Z |
-| (others) | Custom | - | PASSWORD_DEFAULT |
-
-### Password Hash Update
-- Password lashed using bcrypt (salt rounds: 8)
-- Password stored in `user` table, `password` column
-
-## Testing Guide
-
-### Prerequisites
-- Application running di `http://localhost:7001`
-- Test user tersedia di database dengan profile lengkap
-- Environment variable `ENVIRONMENT=development` untuk testing
-
-### Test User Data
-```
-Username: agnes
-NIK: 1234567890123456
-Email (Corporate): agnes@company.com
-Email (Non-Corporate): agnes@gmail.com
-```
-
-### Using Node.js
-
-```javascript
-const http = require('http');
-
-const data = JSON.stringify({
-  username: 'agnes',
-  nik: '1234567890123456',
-  email: 'agnes@company.com',
-  recaptchaToken: 'test-token-dev'
-});
-
-const options = {
-  hostname: 'localhost',
-  port: 7001,
-  path: '/auth/resetPassword',
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Content-Length': data.length
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "action": "LOGIN",
+      "userid": 123,
+      "username": "john.doe",
+      "tenant_id": "onx_dev",
+      "date_create": "2025-01-15T10:30:45.000Z",
+      "before": null,
+      "after": "{\"loginTime\":\"2025-01-15T10:30:45.123Z\"}",
+      "create_at": "2025-01-15T10:30:45.123Z",
+      "update_at": "2025-01-15T10:30:45.123Z"
+    }
+  ],
+  "pagination": {
+    "total": 150,
+    "limit": 50,
+    "offset": 0
   }
+}
+```
+
+### 2. Get User Activity Logs
+**Endpoint:** `GET /activity-log/user`
+
+**Query Parameters:**
+- `limit` (optional): Number of records to return (default: 50, max: 500)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Example:**
+```bash
+curl -X GET "http://localhost:7001/activity-log/user?limit=50" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+**Response:** Same format as tenant logs
+
+### 3. Get Logs by Action Type
+**Endpoint:** `GET /activity-log/action`
+
+**Query Parameters:**
+- `action` (required): Action type to filter by
+- `limit` (optional): Number of records to return (default: 50, max: 500)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Example:**
+```bash
+curl -X GET "http://localhost:7001/activity-log/action?action=UPDATE_PROFILE&limit=50" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+### 4. Advanced Search/Filter Logs
+**Endpoint:** `GET /activity-log/search`
+
+**Query Parameters:**
+- `userId` (optional): Filter by user ID
+- `action` (optional): Filter by action type
+- `username` (optional): Filter by username
+- `startDate` (optional): Filter logs from this date (ISO 8601 format: 2025-01-01)
+- `endDate` (optional): Filter logs until this date (ISO 8601 format: 2025-12-31)
+- `limit` (optional): Number of records to return (default: 50, max: 500)
+- `offset` (optional): Pagination offset (default: 0)
+
+**Example:**
+```bash
+curl -X GET "http://localhost:7001/activity-log/search?userId=123&action=UPDATE_PROFILE&startDate=2025-01-01&endDate=2025-12-31&limit=100" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+
+## Logged Actions
+
+### Authentication Actions
+- **LOGIN** - User login event
+- **RESET_PASSWORD** - Password reset by user
+- **CHANGE_PASSWORD** - User changes own password
+- **SETUP_2FA** - Two-factor authentication setup
+
+### Profile Actions
+- **UPDATE_PROFILE** - User profile information updated
+- **UPDATE_USER** - User account information updated
+
+### File Operations
+- **UPLOAD_ATTACHMENT** - File/attachment upload
+
+### Other Actions
+- **UPDATE_REMARK** - Remark or comment updated
+- **ACTIVATE_ACCOUNT** - Account activated
+- **DEACTIVATE_ACCOUNT** - Account deactivated
+
+## Before/After Data Structure
+
+Each log entry can contain `before` and `after` fields with JSON-formatted state snapshots:
+
+### Profile Update Example
+```json
+{
+  "action": "UPDATE_PROFILE",
+  "before": {
+    "name": "John Doe",
+    "nik": "1234567890123456",
+    "direktorat": "IT",
+    "divisi": "Development",
+    "email_corporate": "john@company.com"
+  },
+  "after": {
+    "name": "John Smith",
+    "nik": "1234567890123456",
+    "direktorat": "IT",
+    "divisi": "Operations",
+    "email_corporate": "john.smith@company.com"
+  }
+}
+```
+
+### Login Example
+```json
+{
+  "action": "LOGIN",
+  "before": null,
+  "after": {
+    "loginTime": "2025-01-15T10:30:45.123Z"
+  }
+}
+```
+
+### File Upload Example
+```json
+{
+  "action": "UPLOAD_ATTACHMENT",
+  "before": null,
+  "after": {
+    "filename": "document.pdf",
+    "fileType": "application/pdf",
+    "fileSize": 1048576
+  }
+}
+```
+
+## Integration Points
+
+### Where Actions Are Logged
+
+1. **Authentication (`src/auth/auth.service.ts`)**
+   - `validateUserWithRecaptcha()` → triggers login logging
+   - `resetPassword()` → logs password reset
+   - `changePassword()` → logs password change
+
+2. **Profile Management (`src/profile/profile.service.ts`)**
+   - `updateProfile()` → logs profile updates with before/after
+
+3. **Activity Log Retrieval (`src/activity-log/activity-log.controller.ts`)**
+   - Provides endpoints to query logged activities
+
+## Usage Patterns
+
+### Pattern 1: Audit Trail for User
+Track all actions performed by a specific user:
+```bash
+GET /activity-log/search?userId=123&limit=100
+```
+
+### Pattern 2: Review Updates to Specific Entity
+Track all updates to a user's profile:
+```bash
+GET /activity-log/search?userId=123&action=UPDATE_PROFILE&limit=50
+```
+
+### Pattern 3: Date Range Audit
+Review all activities within a specific date range:
+```bash
+GET /activity-log/search?startDate=2025-01-01&endDate=2025-01-31&limit=100
+```
+
+### Pattern 4: Compliance Report
+Get all password resets for compliance:
+```bash
+GET /activity-log/action?action=RESET_PASSWORD&limit=500
+```
+
+## Database Schema
+
+**Table:** `log_tenant`
+
+```sql
+CREATE TABLE log_tenant (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  action VARCHAR(255) NOT NULL,
+  userid INT NOT NULL,
+  username VARCHAR(255) NOT NULL,
+  tenant_id VARCHAR(255) NOT NULL,
+  date_create DATETIME NOT NULL,
+  before TEXT NULL,
+  after TEXT NULL,
+  create_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  update_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  KEY idx_tenant (tenant_id),
+  KEY idx_user (userid),
+  KEY idx_action (action),
+  KEY idx_date (date_create)
+);
+```
+
+## Error Handling
+
+- Logging failures are non-critical and don't block main operations
+- If logging fails, error is logged to console but operation succeeds
+- All endpoints include proper error handling and validation
+- Maximum pagination limit of 500 records per request
+
+## Service Injection
+
+To add logging to any service:
+
+```typescript
+import { TenantActivityLogService } from 'src/libs/tenant-activity-log.service';
+
+@Injectable()
+export class MyService {
+  constructor(
+    private readonly activityLogService: TenantActivityLogService,
+  ) {}
+
+  async doSomething(userId: string, username: string, tenantId: string) {
+    // Do work...
+    
+    // Log the action
+    await this.activityLogService.log({
+      action: 'CUSTOM_ACTION',
+      username,
+      userid: userId,
+      tenant_id: tenantId,
+      before: oldData,
+      after: newData,
+    });
+  }
+}
+```
+
+## Frontend Integration
+
+### React Example
+```javascript
+const fetchActivityLogs = async (tenantId, token) => {
+  const response = await fetch(
+    'http://localhost:7001/activity-log/tenant?limit=50&offset=0',
+    {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      }
+    }
+  );
+  return await response.json();
 };
 
-const req = http.request(options, (res) => {
-  let body = '';
-  res.on('data', (chunk) => body += chunk);
-  res.on('end', () => {
-    console.log('Status:', res.statusCode);
-    console.log('Response:', body);
-  });
-});
-
-req.write(data);
-req.end();
+// Usage in component
+useEffect(() => {
+  const logs = await fetchActivityLogs(tenant, accessToken);
+  setActivityLogs(logs.data);
+}, [tenant, accessToken]);
 ```
 
-### Using Postman
+## Performance Considerations
 
-1. **Create New Request**
-   - Method: `POST`
-   - URL: `http://localhost:7001/auth/resetPassword`
+- Indexed on: tenant_id, userid, action, date_create
+- Max 500 records per request to prevent large payloads
+- Pagination required for large datasets
+- Consider archiving old logs after retention period
 
-2. **Headers**
-   - `Content-Type: application/json`
+## Security Notes
 
-3. **Body (JSON)**
-   ```json
-   {
-     "username": "agnes",
-     "nik": "1234567890123456",
-     "email": "agnes@company.com",
-     "recaptchaToken": "test-token-dev"
-   }
-   ```
-
-4. **Send Request**
-   - Expected Response: `200` atau `201` dengan `success: true`
-
-### Test Scenarios
-
-#### Test 1: Valid Credentials
-```bash
-POST /auth/resetPassword
-{
-  "username": "agnes",
-  "nik": "1234567890123456",
-  "email": "agnes@company.com",
-  "recaptchaToken": "test-token-dev"
-}
-```
-**Expected:** ✅ HTTP 200, Password reset successfully
-
-#### Test 2: Invalid NIK
-```bash
-POST /auth/resetPassword
-{
-  "username": "agnes",
-  "nik": "wrong-nik",
-  "email": "agnes@company.com",
-  "recaptchaToken": "test-token-dev"
-}
-```
-**Expected:** ❌ HTTP 400, "NIK tidak sesuai"
-
-#### Test 3: Invalid Email
-```bash
-POST /auth/resetPassword
-{
-  "username": "agnes",
-  "nik": "1234567890123456",
-  "email": "wrong@email.com",
-  "recaptchaToken": "test-token-dev"
-}
-```
-**Expected:** ❌ HTTP 400, "Email tidak sesuai"
-
-#### Test 4: Non-existent User
-```bash
-POST /auth/resetPassword
-{
-  "username": "nonexistent",
-  "nik": "1234567890123456",
-  "email": "agnes@company.com",
-  "recaptchaToken": "test-token-dev"
-}
-```
-**Expected:** ❌ HTTP 400, "User not found"
-
-#### Test 5: Using Non-Corporate Email
-```bash
-POST /auth/resetPassword
-{
-  "username": "agnes",
-  "nik": "1234567890123456",
-  "email": "agnes@gmail.com",
-  "recaptchaToken": "test-token-dev"
-}
-```
-**Expected:** ✅ HTTP 200, Password reset successfully
-
-## Database Tables & Fields
-
-### user_profile (Required Fields)
-```sql
-SELECT id, user_id, nik, email_corporate, email_non_corporate FROM user_profile WHERE user_id = ?;
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | int | Yes | Primary key |
-| `user_id` | varchar | Yes | User ID reference |
-| `nik` | varchar | Yes | Nomor Induk Karyawan |
-| `email_corporate` | varchar | No | Email perusahaan |
-| `email_non_corporate` | varchar | No | Email personal/non-perusahaan |
-
-### user (Updated Fields)
-```sql
-SELECT id, username, password FROM user WHERE username = ?;
-```
-
-| Field | Type | Changes | Description |
-|-------|------|---------|-------------|
-| `password` | varchar | ✏️ Updated | Bcrypt hash password baru |
-
-## Environment Configuration
-
-### Required Environment Variables
-```env
-# Global default password (fallback if no tenant-specific password)
-PASSWORD_DEFAULT=your_default_password
-
-# Tenant-Specific Default Passwords for Reset Password Feature
-TENANT_PASSWORD_USER_MANAGEMENT="I7lBLi'7x7s"
-TENANT_PASSWORD_USER_OMNIX="$Hm$U16a3Z"
-
-# reCAPTCHA Configuration
-RECAPTCHA_SECRET_KEY=your_google_recaptcha_secret_key
-RECAPTCHA_SCORE_THRESHOLD=0.5
-
-# Application Mode
-ENVIRONMENT=development
-RECAPTCHA_DEV_TOKEN=test-token-dev
-```
-
-### Tenant Password Naming Convention
-Environment variable format: `TENANT_PASSWORD_<TENANT_CODE>`
-
-- Tenant code is derived from the `tenant` table's `tenant_code` column
-- Convert tenant code to UPPERCASE: `user_management` → `USER_MANAGEMENT`
-- Replace spaces/special chars with underscores if needed
-- Example: `TENANT_PASSWORD_USER_MANAGEMENT`
-
-### Configuration Examples
-
-**Example 1: New Tenant**
-If you create a new tenant with code `CUSTOM_TENANT`, add:
-```env
-TENANT_PASSWORD_CUSTOM_TENANT="YourCustomPassword123!"
-```
-
-**Example 2: Without Tenant-Specific Password**
-If a user has no tenant assigned, the system uses:
-```env
-PASSWORD_DEFAULT=your_default_password
-```
-
-## Security Considerations
-
-### ✅ Implemented Security Features
-1. **reCAPTCHA Verification** - Mencegah automated attacks
-2. **NIK Validation** - Memastikan identitas karyawan
-3. **Email Validation** - Konfirmasi email yang terdaftar
-4. **Bcrypt Hashing** - Password di-hash dengan salt rounds 8
-5. **Error Messages** - Tidak mengungkap informasi sensitif
-6. **HTTP Status Codes** - Proper error responses (400 untuk validation)
-
-### ⚠️ Security Notes
-- Password default harus kuat dan diubah oleh pengguna saat login pertama
-- reCAPTCHA token harus valid dari Google
-- jangan expose sensitive data di error messages
-- Gunakan HTTPS di production
-- Implement rate limiting untuk mencegah brute force
-
-## Implementation Details
-
-### Code Location
-- **Controller:** `src/auth/auth.controller.ts`
-- **Service:** `src/auth/auth.service.ts`
-- **DTO:** `src/auth/dto/auth.dto.ts`
-- **Module:** `src/auth/auth.module.ts`
-
-### Dependencies
-- `@nestjs/common` - NestJS framework
-- `@nestjs/typeorm` - TypeORM integration
-- `bcryptjs` - Password hashing
-- `class-validator` - DTO validation
-- `axios` - HTTP requests (untuk reCAPTCHA)
-
-## Troubleshooting
-
-### Error: "Unexpected token u in JSON at position 1"
-**Cause:** curl command di Windows PowerShell mengalami issue dengan quote escaping
-**Solution:** Gunakan Node.js atau Postman untuk testing
-
-### Error: "User not found"
-**Solution:** Pastikan username terdaftar di database `user` table
-
-### Error: "User profile not found"
-**Solution:** Pastikan user memiliki record di `user_profile` table
-
-### Error: "NIK tidak sesuai"
-**Solution:** Pastikan NIK di request cocok dengan `user_profile.nik`
-
-### Error: "Email tidak sesuai"
-**Solution:** Gunakan email yang cocok dengan `email_corporate` atau `email_non_corporate`
-
-### Error: "reCAPTCHA verification failed"
-**Solution:** 
-- Pastikan token valid
-- Di development, gunakan `test-token-dev`
-- Di production, pastikan `RECAPTCHA_SECRET_KEY` sudah dikonfigurasi
-
-## API Versioning & Deprecation
-
-Current Version: **v1.0**
-- Status: ✅ Stable & Production Ready
-- Last Updated: May 20, 2026
-- Breaking Changes: None
-
-## Support & Maintenance
-
-### Test Results
-```
-✅ Valid credentials - Password reset successfully
-✅ Invalid NIK validation - Proper error response
-✅ Invalid email validation - Proper error response
-✅ User existence check - Proper error response
-✅ reCAPTCHA verification - Development token accepted
-✅ External access (ngrok) - Tunnel accessible
-✅ Database persistence - Password hash updated correctly
-```
-
-### Contact & Issues
-For bug reports or feature requests, please create an issue in the project repository.
-
----
-
-**Documentation Version:** 1.0  
-**Last Updated:** May 20, 2026  
-**Status:** ✅ Production Ready
+- Activity logs are only accessible with JWT authentication
+- Logs capture user actions but not sensitive data like passwords
+- Tenant isolation enforced (users can only see logs from their tenant)
+- User can see their own logs or tenant admin can see all tenant logs

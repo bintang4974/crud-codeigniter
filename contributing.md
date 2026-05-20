@@ -1,93 +1,452 @@
-# Contributing to CodeIgniter
+# Reset Password Feature Documentation
 
-CodeIgniter is a community driven project and accepts contributions of code and documentation from the community. These contributions are made in the form of Issues or [Pull Requests](http://help.github.com/send-pull-requests/) on the [CodeIgniter repository](https://github.com/bcit-ci/CodeIgniter) on GitHub.
+## Overview
+Reset Password adalah fitur keamanan yang memungkinkan pengguna untuk mereset password mereka dengan validasi NIK (Nomor Induk Karyawan) dan email, serta verifikasi reCAPTCHA.
 
-Issues are a quick way to point out a bug. If you find a bug or documentation error in CodeIgniter then please check a few things first:
+## Endpoint Details
 
-1. There is not already an open Issue
-2. The issue has already been fixed (check the develop branch, or look for closed Issues)
-3. Is it something really obvious that you can fix yourself?
+### URL
+```
+POST /auth/resetPassword
+```
 
-Reporting issues is helpful but an even better approach is to send a Pull Request, which is done by "Forking" the main repository and committing to your own copy. This will require you to use the version control system called Git.
+### Base URL
+- **Development (localhost):** `http://localhost:7001`
+- **Production (ngrok tunnel):** `https://subacetabular-jodee-literally.ngrok-free.dev`
 
-## Guidelines
+## Request Body
 
-Before we look into how, here are the guidelines. If your Pull Requests fail
-to pass these guidelines it will be declined and you will need to re-submit
-when you’ve made the changes. This might sound a bit tough, but it is required
-for us to maintain quality of the code-base.
+### Required Fields
+```json
+{
+  "username": "string (required)",
+  "nik": "string (required)",
+  "email": "string (required)",
+  "recaptchaToken": "string (required)"
+}
+```
 
-### PHP Style
+### Field Descriptions
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `username` | string | Username karyawan yang akan mereset password | `agnes` |
+| `nik` | string | Nomor Induk Karyawan (NIK) sesuai data di user_profile | `1234567890123456` |
+| `email` | string | Email karyawan (corporate atau non-corporate) | `agnes@company.com` atau `agnes@gmail.com` |
+| `recaptchaToken` | string | reCAPTCHA token untuk verifikasi | `test-token-dev` (development) |
 
-All code must meet the [Style Guide](https://codeigniter.com/user_guide/general/styleguide.html), which is
-essentially the [Allman indent style](https://en.wikipedia.org/wiki/Indent_style#Allman_style), underscores and readable operators. This makes certain that all code is the same format as the existing code and means it will be as readable as possible.
+## Validation Rules
 
-### Documentation
+### 1. reCAPTCHA Verification
+- Token harus valid dan terverifikasi
+- Dalam development mode, token `test-token-dev` diterima untuk testing
+- Production menggunakan Google reCAPTCHA v3
 
-If you change anything that requires a change to documentation then you will need to add it. New classes, methods, parameters, changing default values, etc are all things that will require a change to documentation. The change-log must also be updated for every change. Also PHPDoc blocks must be maintained.
+### 2. User Existence
+- Username harus terdaftar di dalam database
+- User profile harus ada di tabel `user_profile`
 
-### Compatibility
+### 3. NIK Validation
+- NIK harus cocok dengan `user_profile.nik`
+- NIK tidak boleh kosong
+- Error: "NIK tidak sesuai" (HTTP 400)
 
-CodeIgniter recommends PHP 5.4 or newer to be used, but it should be
-compatible with PHP 5.2.4 so all code supplied must stick to this
-requirement. If PHP 5.3 (and above) functions or features are used then
-there must be a fallback for PHP 5.2.4.
+### 4. Email Validation
+- Email harus cocok dengan salah satu:
+  - `user_profile.email_corporate` (email perusahaan)
+  - `user_profile.email_non_corporate` (email non-perusahaan)
+- Error: "Email tidak sesuai" (HTTP 400)
 
-### Branching
+## Response Examples
 
-CodeIgniter uses the [Git-Flow](http://nvie.com/posts/a-successful-git-branching-model/) branching model which requires all pull requests to be sent to the "develop" branch. This is
-where the next planned version will be developed. The "master" branch will always contain the latest stable version and is kept clean so a "hotfix" (e.g: an emergency security patch) can be applied to master to create a new version, without worrying about other features holding it up. For this reason all commits need to be made to "develop" and any sent to "master" will be closed automatically. If you have multiple changes to submit, please place all changes into their own branch on your fork.
+### Success Response
+```json
+{
+  "message": "Password berhasil direset",
+  "success": true
+}
+```
 
-One thing at a time: A pull request should only contain one change. That does not mean only one commit, but one change - however many commits it took. The reason for this is that if you change X and Y but send a pull request for both at the same time, we might really want X but disagree with Y, meaning we cannot merge the request. Using the Git-Flow branching model you can create new branches for both of these features and send two requests.
+**HTTP Status:** `200` atau `201`
 
-### Signing
+### Error Responses
 
-You must sign your work, certifying that you either wrote the work or otherwise have the right to pass it on to an open source project. git makes this trivial as you merely have to use `--signoff` on your commits to your CodeIgniter fork.
+#### Invalid NIK
+```json
+{
+  "message": "NIK tidak sesuai",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
 
-`git commit --signoff`
+#### Invalid Email
+```json
+{
+  "message": "Email tidak sesuai",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
 
-or simply
+#### User Not Found
+```json
+{
+  "message": "User not found",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
 
-`git commit -s`
+#### User Profile Not Found
+```json
+{
+  "message": "User profile not found",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
 
-This will sign your commits with the information setup in your git config, e.g.
+#### reCAPTCHA Verification Failed
+```json
+{
+  "message": "reCAPTCHA verification failed. Please try again.",
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
 
-`Signed-off-by: John Q Public <john.public@example.com>`
+## Password Reset Behavior
 
-If you are using [Tower](http://www.git-tower.com/) there is a "Sign-Off" checkbox in the commit window. You could even alias git commit to use the `-s` flag so you don’t have to think about it.
+### Default Password Strategy
+The reset password feature uses a **tenant-aware password selection system**:
 
-By signing your work in this manner, you certify to a "Developer's Certificate of Origin". The current version of this certificate is in the `DCO.txt` file in the root of this repository.
+1. **Tenant-Specific Passwords** (if configured):
+   - Each tenant can have a specific default password
+   - Set via environment variables: `TENANT_PASSWORD_<TENANT_CODE>`
+   - Example: `TENANT_PASSWORD_USER_MANAGEMENT=I7lBLi'7x7s`
 
-## How-to Guide
+2. **Fallback to Global Default** (if no tenant password):
+   - Uses `PASSWORD_DEFAULT` environment variable
+   - Applied when user has no tenant or tenant has no specific password
 
-There are two ways to make changes, the easy way and the hard way. Either way you will need to [create a GitHub account](https://github.com/signup/free).
+### Tenant-Specific Password Configuration
 
-Easy way GitHub allows in-line editing of files for making simple typo changes and quick-fixes. This is not the best way as you are unable to test the code works. If you do this you could be introducing syntax errors, etc, but for a Git-phobic user this is good for a quick-fix.
+The system supports different default passwords for different tenancies:
 
-Hard way The best way to contribute is to "clone" your fork of CodeIgniter to your development area. That sounds like some jargon, but "forking" on GitHub means "making a copy of that repo to your account" and "cloning" means "copying that code to your environment so you can work on it".
+**Environment Variables:**
+```env
+# User Management Tenancy
+TENANT_PASSWORD_USER_MANAGEMENT="I7lBLi'7x7s"
 
-1. [Set up Git](https://help.github.com/en/articles/set-up-git) (Windows, Mac & Linux)
-2. Go to the [CodeIgniter repo](https://github.com/bcit-ci/CodeIgniter)
-3. [Fork it](https://help.github.com/en/articles/fork-a-repo)
-4. [Clone](https://help.github.com/en/articles/fetching-a-remote#clone) your forked CodeIgniter repo: git@github.com:<your-name>/CodeIgniter.git.
-5. Checkout the "develop" branch. At this point you are ready to start making changes.
-6. Fix existing bugs on the Issue tracker after taking a look to see nobody else is working on them.
-7. [Commit](https://help.github.com/en/articles/adding-a-file-to-a-repository-using-the-command-line) the files
-8. [Push](https://help.github.com/en/articles/pushing-to-a-remote) your develop branch to your fork
-9. [Send a pull request](https://help.github.com/en/articles/creating-a-pull-request)
+# User Omnix Tenancy  
+TENANT_PASSWORD_USER_OMNIX="$Hm$U16a3Z"
 
-The Reactor Engineers will now be alerted about the change and at least one of the team will respond. If your change fails to meet the guidelines it will be bounced, or feedback will be provided to help you improve it.
+# Global fallback
+PASSWORD_DEFAULT=abstract123.
+```
 
-Once the Reactor Engineer handling your pull request is happy with it they will merge it into develop and your patch will be part of the next release.
+**How It Works:**
+1. When reset password is called, the system looks up the user's `tenant_id`
+2. Queries the `tenant` table using the `tenant_id`
+3. Gets the `tenant_code` (e.g., "USER_MANAGEMENT", "USER_OMNIX")
+4. Looks for `TENANT_PASSWORD_<TENANT_CODE>` environment variable
+5. If found, uses that password; otherwise uses `PASSWORD_DEFAULT`
 
-### Keeping your fork up-to-date
+### Available Tenants
+Currently configured tenants in the system:
 
-Unlike systems like Subversion, Git can have multiple remotes. A remote is the name for a URL of a Git repository. By default your fork will have a remote named "origin" which points to your fork, but you can add another remote named "codeigniter" which points to `git://github.com/bcit-ci/CodeIgniter.git`. This is a read-only remote but you can pull from this develop branch to update your own.
+| Tenant Code | Tenant Name | Tenant ID | Default Password |
+|-------------|-------------|-----------|------------------|
+| USER_MANAGEMENT | User Management | tenant_user_management | I7lBLi'7x7s |
+| USER_OMNIX | User Omnix | tenant_user_omnix | $Hm$U16a3Z |
+| (others) | Custom | - | PASSWORD_DEFAULT |
 
-If you are using command-line you can do the following:
+### Password Hash Update
+- Password lashed using bcrypt (salt rounds: 8)
+- Password stored in `user` table, `password` column
 
-1. `git remote add codeigniter git://github.com/bcit-ci/CodeIgniter.git`
-2. `git pull codeigniter develop`
-3. `git push origin develop`
+## Testing Guide
 
-Now your fork is up to date. This should be done regularly, or before you send a pull request at least.
+### Prerequisites
+- Application running di `http://localhost:7001`
+- Test user tersedia di database dengan profile lengkap
+- Environment variable `ENVIRONMENT=development` untuk testing
+
+### Test User Data
+```
+Username: agnes
+NIK: 1234567890123456
+Email (Corporate): agnes@company.com
+Email (Non-Corporate): agnes@gmail.com
+```
+
+### Using Node.js
+
+```javascript
+const http = require('http');
+
+const data = JSON.stringify({
+  username: 'agnes',
+  nik: '1234567890123456',
+  email: 'agnes@company.com',
+  recaptchaToken: 'test-token-dev'
+});
+
+const options = {
+  hostname: 'localhost',
+  port: 7001,
+  path: '/auth/resetPassword',
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Content-Length': data.length
+  }
+};
+
+const req = http.request(options, (res) => {
+  let body = '';
+  res.on('data', (chunk) => body += chunk);
+  res.on('end', () => {
+    console.log('Status:', res.statusCode);
+    console.log('Response:', body);
+  });
+});
+
+req.write(data);
+req.end();
+```
+
+### Using Postman
+
+1. **Create New Request**
+   - Method: `POST`
+   - URL: `http://localhost:7001/auth/resetPassword`
+
+2. **Headers**
+   - `Content-Type: application/json`
+
+3. **Body (JSON)**
+   ```json
+   {
+     "username": "agnes",
+     "nik": "1234567890123456",
+     "email": "agnes@company.com",
+     "recaptchaToken": "test-token-dev"
+   }
+   ```
+
+4. **Send Request**
+   - Expected Response: `200` atau `201` dengan `success: true`
+
+### Test Scenarios
+
+#### Test 1: Valid Credentials
+```bash
+POST /auth/resetPassword
+{
+  "username": "agnes",
+  "nik": "1234567890123456",
+  "email": "agnes@company.com",
+  "recaptchaToken": "test-token-dev"
+}
+```
+**Expected:** ✅ HTTP 200, Password reset successfully
+
+#### Test 2: Invalid NIK
+```bash
+POST /auth/resetPassword
+{
+  "username": "agnes",
+  "nik": "wrong-nik",
+  "email": "agnes@company.com",
+  "recaptchaToken": "test-token-dev"
+}
+```
+**Expected:** ❌ HTTP 400, "NIK tidak sesuai"
+
+#### Test 3: Invalid Email
+```bash
+POST /auth/resetPassword
+{
+  "username": "agnes",
+  "nik": "1234567890123456",
+  "email": "wrong@email.com",
+  "recaptchaToken": "test-token-dev"
+}
+```
+**Expected:** ❌ HTTP 400, "Email tidak sesuai"
+
+#### Test 4: Non-existent User
+```bash
+POST /auth/resetPassword
+{
+  "username": "nonexistent",
+  "nik": "1234567890123456",
+  "email": "agnes@company.com",
+  "recaptchaToken": "test-token-dev"
+}
+```
+**Expected:** ❌ HTTP 400, "User not found"
+
+#### Test 5: Using Non-Corporate Email
+```bash
+POST /auth/resetPassword
+{
+  "username": "agnes",
+  "nik": "1234567890123456",
+  "email": "agnes@gmail.com",
+  "recaptchaToken": "test-token-dev"
+}
+```
+**Expected:** ✅ HTTP 200, Password reset successfully
+
+## Database Tables & Fields
+
+### user_profile (Required Fields)
+```sql
+SELECT id, user_id, nik, email_corporate, email_non_corporate FROM user_profile WHERE user_id = ?;
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | int | Yes | Primary key |
+| `user_id` | varchar | Yes | User ID reference |
+| `nik` | varchar | Yes | Nomor Induk Karyawan |
+| `email_corporate` | varchar | No | Email perusahaan |
+| `email_non_corporate` | varchar | No | Email personal/non-perusahaan |
+
+### user (Updated Fields)
+```sql
+SELECT id, username, password FROM user WHERE username = ?;
+```
+
+| Field | Type | Changes | Description |
+|-------|------|---------|-------------|
+| `password` | varchar | ✏️ Updated | Bcrypt hash password baru |
+
+## Environment Configuration
+
+### Required Environment Variables
+```env
+# Global default password (fallback if no tenant-specific password)
+PASSWORD_DEFAULT=your_default_password
+
+# Tenant-Specific Default Passwords for Reset Password Feature
+TENANT_PASSWORD_USER_MANAGEMENT="I7lBLi'7x7s"
+TENANT_PASSWORD_USER_OMNIX="$Hm$U16a3Z"
+
+# reCAPTCHA Configuration
+RECAPTCHA_SECRET_KEY=your_google_recaptcha_secret_key
+RECAPTCHA_SCORE_THRESHOLD=0.5
+
+# Application Mode
+ENVIRONMENT=development
+RECAPTCHA_DEV_TOKEN=test-token-dev
+```
+
+### Tenant Password Naming Convention
+Environment variable format: `TENANT_PASSWORD_<TENANT_CODE>`
+
+- Tenant code is derived from the `tenant` table's `tenant_code` column
+- Convert tenant code to UPPERCASE: `user_management` → `USER_MANAGEMENT`
+- Replace spaces/special chars with underscores if needed
+- Example: `TENANT_PASSWORD_USER_MANAGEMENT`
+
+### Configuration Examples
+
+**Example 1: New Tenant**
+If you create a new tenant with code `CUSTOM_TENANT`, add:
+```env
+TENANT_PASSWORD_CUSTOM_TENANT="YourCustomPassword123!"
+```
+
+**Example 2: Without Tenant-Specific Password**
+If a user has no tenant assigned, the system uses:
+```env
+PASSWORD_DEFAULT=your_default_password
+```
+
+## Security Considerations
+
+### ✅ Implemented Security Features
+1. **reCAPTCHA Verification** - Mencegah automated attacks
+2. **NIK Validation** - Memastikan identitas karyawan
+3. **Email Validation** - Konfirmasi email yang terdaftar
+4. **Bcrypt Hashing** - Password di-hash dengan salt rounds 8
+5. **Error Messages** - Tidak mengungkap informasi sensitif
+6. **HTTP Status Codes** - Proper error responses (400 untuk validation)
+
+### ⚠️ Security Notes
+- Password default harus kuat dan diubah oleh pengguna saat login pertama
+- reCAPTCHA token harus valid dari Google
+- jangan expose sensitive data di error messages
+- Gunakan HTTPS di production
+- Implement rate limiting untuk mencegah brute force
+
+## Implementation Details
+
+### Code Location
+- **Controller:** `src/auth/auth.controller.ts`
+- **Service:** `src/auth/auth.service.ts`
+- **DTO:** `src/auth/dto/auth.dto.ts`
+- **Module:** `src/auth/auth.module.ts`
+
+### Dependencies
+- `@nestjs/common` - NestJS framework
+- `@nestjs/typeorm` - TypeORM integration
+- `bcryptjs` - Password hashing
+- `class-validator` - DTO validation
+- `axios` - HTTP requests (untuk reCAPTCHA)
+
+## Troubleshooting
+
+### Error: "Unexpected token u in JSON at position 1"
+**Cause:** curl command di Windows PowerShell mengalami issue dengan quote escaping
+**Solution:** Gunakan Node.js atau Postman untuk testing
+
+### Error: "User not found"
+**Solution:** Pastikan username terdaftar di database `user` table
+
+### Error: "User profile not found"
+**Solution:** Pastikan user memiliki record di `user_profile` table
+
+### Error: "NIK tidak sesuai"
+**Solution:** Pastikan NIK di request cocok dengan `user_profile.nik`
+
+### Error: "Email tidak sesuai"
+**Solution:** Gunakan email yang cocok dengan `email_corporate` atau `email_non_corporate`
+
+### Error: "reCAPTCHA verification failed"
+**Solution:** 
+- Pastikan token valid
+- Di development, gunakan `test-token-dev`
+- Di production, pastikan `RECAPTCHA_SECRET_KEY` sudah dikonfigurasi
+
+## API Versioning & Deprecation
+
+Current Version: **v1.0**
+- Status: ✅ Stable & Production Ready
+- Last Updated: May 20, 2026
+- Breaking Changes: None
+
+## Support & Maintenance
+
+### Test Results
+```
+✅ Valid credentials - Password reset successfully
+✅ Invalid NIK validation - Proper error response
+✅ Invalid email validation - Proper error response
+✅ User existence check - Proper error response
+✅ reCAPTCHA verification - Development token accepted
+✅ External access (ngrok) - Tunnel accessible
+✅ Database persistence - Password hash updated correctly
+```
+
+### Contact & Issues
+For bug reports or feature requests, please create an issue in the project repository.
+
+---
+
+**Documentation Version:** 1.0  
+**Last Updated:** May 20, 2026  
+**Status:** ✅ Production Ready
